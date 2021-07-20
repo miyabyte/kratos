@@ -33,6 +33,10 @@ func WithSource(s ...Source) Option {
 }
 
 // WithDecoder with config decoder.
+// DefaultDecoder behavior:
+// If KeyValue.Format is non-empty, then KeyValue.Value will be deserialized into map[string]interface{}
+// and stored in the config cache(map[string]interface{})
+// if KeyValue.Format is empty,{KeyValue.Key : KeyValue.Value} will be stored in config cache(map[string]interface{})
 func WithDecoder(d Decoder) Option {
 	return func(o *options) {
 		o.decoder = d
@@ -92,8 +96,13 @@ func defaultResolver(input map[string]interface{}) error {
 				}
 			case []interface{}:
 				for i, iface := range vt {
-					if s, ok := iface.(string); ok {
-						vt[i] = os.Expand(s, mapper)
+					switch it := iface.(type) {
+					case string:
+						vt[i] = os.Expand(it, mapper)
+					case map[string]interface{}:
+						if err := resolve(it); err != nil {
+							return err
+						}
 					}
 				}
 				sub[k] = vt
