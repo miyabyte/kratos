@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
-	"github.com/go-kratos/etcd/registry"
+	"github.com/go-kratos/kratos/contrib/registry/etcd/v2"
 	"github.com/go-kratos/kratos/examples/helloworld/helloworld"
 	"github.com/go-kratos/kratos/v2/transport/grpc"
 	"github.com/go-kratos/kratos/v2/transport/http"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	srcgrpc "google.golang.org/grpc"
 )
 
 func main() {
@@ -18,13 +20,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	r := registry.New(cli)
-	callGRPC(r)
-	callHTTP(r)
-}
+	r := etcd.New(cli)
 
-func callGRPC(r *registry.Registry) {
-	conn, err := grpc.DialInsecure(
+	connGRPC, err := grpc.DialInsecure(
 		context.Background(),
 		grpc.WithEndpoint("discovery:///helloworld"),
 		grpc.WithDiscovery(r),
@@ -32,16 +30,9 @@ func callGRPC(r *registry.Registry) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	client := helloworld.NewGreeterClient(conn)
-	reply, err := client.SayHello(context.Background(), &helloworld.HelloRequest{Name: "kratos"})
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("[grpc] SayHello %+v\n", reply)
-}
+	defer connGRPC.Close()
 
-func callHTTP(r *registry.Registry) {
-	conn, err := http.NewClient(
+	connHTTP, err := http.NewClient(
 		context.Background(),
 		http.WithEndpoint("discovery:///helloworld"),
 		http.WithDiscovery(r),
@@ -50,6 +41,25 @@ func callHTTP(r *registry.Registry) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer connHTTP.Close()
+
+	for {
+		callHTTP(r, connHTTP)
+		callGRPC(r, connGRPC)
+		time.Sleep(time.Second)
+	}
+}
+
+func callGRPC(r *etcd.Registry, conn *srcgrpc.ClientConn) {
+	client := helloworld.NewGreeterClient(conn)
+	reply, err := client.SayHello(context.Background(), &helloworld.HelloRequest{Name: "kratos"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("[grpc] SayHello %+v\n", reply)
+}
+
+func callHTTP(r *etcd.Registry, conn *http.Client) {
 	client := helloworld.NewGreeterHTTPClient(conn)
 	reply, err := client.SayHello(context.Background(), &helloworld.HelloRequest{Name: "kratos"})
 	if err != nil {

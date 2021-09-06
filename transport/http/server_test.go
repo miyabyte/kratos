@@ -2,14 +2,18 @@ package http
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"github.com/go-kratos/kratos/v2/errors"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-kratos/kratos/v2/errors"
+	"github.com/go-kratos/kratos/v2/middleware"
 
 	"github.com/go-kratos/kratos/v2/internal/host"
 	"github.com/stretchr/testify/assert"
@@ -23,7 +27,7 @@ type testData struct {
 
 func TestServer(t *testing.T) {
 	fn := func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(testData{Path: r.RequestURI})
+		_ = json.NewEncoder(w).Encode(testData{Path: r.RequestURI})
 	}
 	ctx := context.Background()
 	srv := NewServer()
@@ -41,7 +45,7 @@ func TestServer(t *testing.T) {
 	}()
 	time.Sleep(time.Second)
 	testClient(t, srv)
-	srv.Stop(ctx)
+	_ = srv.Stop(ctx)
 }
 
 func testClient(t *testing.T, srv *Server) {
@@ -71,6 +75,7 @@ func testClient(t *testing.T, srv *Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer client.Close()
 	for _, test := range tests {
 		var res testData
 		url := fmt.Sprintf(e.String() + test.path)
@@ -79,16 +84,15 @@ func testClient(t *testing.T, srv *Server) {
 			t.Fatal(err)
 		}
 		resp, err := client.Do(req)
-
 		if test.path == "/index/notfound" && err != nil {
 			if e, ok := err.(*errors.Error); ok && e.Code == http.StatusNotFound {
 				continue
 			}
 		}
-
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
 			t.Fatalf("http status got %d", resp.StatusCode)
 		}
@@ -119,13 +123,12 @@ func testClient(t *testing.T, srv *Server) {
 			t.Errorf("expected %s got %s", test.path, res.Path)
 		}
 	}
-
 }
 
 func BenchmarkServer(b *testing.B) {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		data := &testData{Path: r.RequestURI}
-		json.NewEncoder(w).Encode(data)
+		_ = json.NewEncoder(w).Encode(data)
 		if r.Context().Value(testKey{}) != "test" {
 			w.WriteHeader(500)
 		}
@@ -151,5 +154,76 @@ func BenchmarkServer(b *testing.B) {
 		err := client.Invoke(context.Background(), "POST", "/index", nil, &res)
 		assert.NoError(b, err)
 	}
-	srv.Stop(ctx)
+	_ = srv.Stop(ctx)
+}
+
+func TestNetwork(t *testing.T) {
+	o := &Server{}
+	v := "abc"
+	Network(v)(o)
+	assert.Equal(t, v, o.network)
+}
+
+func TestAddress(t *testing.T) {
+	o := &Server{}
+	v := "abc"
+	Address(v)(o)
+	assert.Equal(t, v, o.address)
+}
+
+func TestTimeout(t *testing.T) {
+	o := &Server{}
+	v := time.Duration(123)
+	Timeout(v)(o)
+	assert.Equal(t, v, o.timeout)
+}
+
+func TestLogger(t *testing.T) {
+	// todo
+}
+
+func TestEndpoint(t *testing.T) {
+	u, err := url.Parse("http://hello/world")
+	assert.NoError(t, err)
+	o := &Server{}
+	Endpoint(u)(o)
+	assert.Equal(t, "hello", o.endpoint.Host)
+	assert.Equal(t, "http", o.endpoint.Scheme)
+}
+
+func TestMiddleware(t *testing.T) {
+	o := &Server{}
+	v := []middleware.Middleware{
+		func(middleware.Handler) middleware.Handler { return nil },
+	}
+	Middleware(v...)(o)
+	assert.Equal(t, v, o.ms)
+}
+
+func TestRequestDecoder(t *testing.T) {
+	o := &Server{}
+	v := func(*http.Request, interface{}) error { return nil }
+	RequestDecoder(v)(o)
+	assert.NotNil(t, o.dec)
+}
+
+func TestResponseEncoder(t *testing.T) {
+	o := &Server{}
+	v := func(http.ResponseWriter, *http.Request, interface{}) error { return nil }
+	ResponseEncoder(v)(o)
+	assert.NotNil(t, o.enc)
+}
+
+func TestErrorEncoder(t *testing.T) {
+	o := &Server{}
+	v := func(http.ResponseWriter, *http.Request, error) {}
+	ErrorEncoder(v)(o)
+	assert.NotNil(t, o.ene)
+}
+
+func TestTLSConfig(t *testing.T) {
+	o := &Server{}
+	v := &tls.Config{}
+	TLSConfig(v)(o)
+	assert.Equal(t, v, o.tlsConf)
 }

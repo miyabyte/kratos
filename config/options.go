@@ -2,7 +2,7 @@ package config
 
 import (
 	"fmt"
-	"os"
+	"regexp"
 	"strings"
 
 	"github.com/go-kratos/kratos/v2/encoding"
@@ -61,7 +61,17 @@ func WithLogger(l log.Logger) Option {
 // to target map[string]interface{} using src.Format codec.
 func defaultDecoder(src *KeyValue, target map[string]interface{}) error {
 	if src.Format == "" {
-		target[src.Key] = src.Value
+		// expand key "aaa.bbb" into map[aaa]map[bbb]interface{}
+		keys := strings.Split(src.Key, ".")
+		for i, k := range keys {
+			if i == len(keys)-1 {
+				target[k] = src.Value
+			} else {
+				sub := make(map[string]interface{})
+				target[k] = sub
+				target = sub
+			}
+		}
 		return nil
 	}
 	if codec := encoding.GetCodec(src.Format); codec != nil {
@@ -71,10 +81,10 @@ func defaultDecoder(src *KeyValue, target map[string]interface{}) error {
 }
 
 // defaultResolver resolve placeholder in map value,
-// placeholder format in ${key:default} or $key.
+// placeholder format in ${key:default}.
 func defaultResolver(input map[string]interface{}) error {
 	mapper := func(name string) string {
-		args := strings.Split(strings.TrimSpace(name), ":")
+		args := strings.SplitN(strings.TrimSpace(name), ":", 2) //nolint:gomnd
 		if v, has := readValue(input, args[0]); has {
 			s, _ := v.String()
 			return s
@@ -89,7 +99,7 @@ func defaultResolver(input map[string]interface{}) error {
 		for k, v := range sub {
 			switch vt := v.(type) {
 			case string:
-				sub[k] = os.Expand(vt, mapper)
+				sub[k] = expand(vt, mapper)
 			case map[string]interface{}:
 				if err := resolve(vt); err != nil {
 					return err
@@ -98,7 +108,7 @@ func defaultResolver(input map[string]interface{}) error {
 				for i, iface := range vt {
 					switch it := iface.(type) {
 					case string:
-						vt[i] = os.Expand(it, mapper)
+						vt[i] = expand(it, mapper)
 					case map[string]interface{}:
 						if err := resolve(it); err != nil {
 							return err
@@ -111,4 +121,15 @@ func defaultResolver(input map[string]interface{}) error {
 		return nil
 	}
 	return resolve(input)
+}
+
+func expand(s string, mapping func(string) string) string {
+	r := regexp.MustCompile(`\${(.*?)}`)
+	re := r.FindAllStringSubmatch(s, -1)
+	for _, i := range re {
+		if len(i) == 2 { //nolint:gomnd
+			s = strings.ReplaceAll(s, i[0], mapping(i[1]))
+		}
+	}
+	return s
 }

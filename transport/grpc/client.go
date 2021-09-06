@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
 	"time"
 
 	"github.com/go-kratos/kratos/v2/middleware"
@@ -14,6 +16,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/balancer/roundrobin"
+	"google.golang.org/grpc/credentials"
 	grpcmd "google.golang.org/grpc/metadata"
 )
 
@@ -48,6 +51,13 @@ func WithDiscovery(d registry.Discovery) ClientOption {
 	}
 }
 
+// WithTLSConfig with TLS config.
+func WithTLSConfig(c *tls.Config) ClientOption {
+	return func(o *clientOptions) {
+		o.tlsConf = c
+	}
+}
+
 // WithUnaryInterceptor returns a DialOption that specifies the interceptor for unary RPCs.
 func WithUnaryInterceptor(in ...grpc.UnaryClientInterceptor) ClientOption {
 	return func(o *clientOptions) {
@@ -65,6 +75,7 @@ func WithOptions(opts ...grpc.DialOption) ClientOption {
 // clientOptions is gRPC Client
 type clientOptions struct {
 	endpoint   string
+	tlsConf    *tls.Config
 	timeout    time.Duration
 	discovery  registry.Discovery
 	middleware []middleware.Middleware
@@ -89,22 +100,24 @@ func dial(ctx context.Context, insecure bool, opts ...ClientOption) (*grpc.Clien
 	for _, o := range opts {
 		o(&options)
 	}
-	var ints = []grpc.UnaryClientInterceptor{
+	ints := []grpc.UnaryClientInterceptor{
 		unaryClientInterceptor(options.middleware, options.timeout),
 	}
 	if len(options.ints) > 0 {
 		ints = append(ints, options.ints...)
 	}
-	var grpcOpts = []grpc.DialOption{
-		//todo: grpc.WithBalancerName is deprecated.
-		grpc.WithBalancerName(roundrobin.Name), //nolint:staticcheck
+	grpcOpts := []grpc.DialOption{
+		grpc.WithDefaultServiceConfig(fmt.Sprintf(`{"LoadBalancingPolicy": "%s"}`, roundrobin.Name)),
 		grpc.WithChainUnaryInterceptor(ints...),
 	}
 	if options.discovery != nil {
-		grpcOpts = append(grpcOpts, grpc.WithResolvers(discovery.NewBuilder(options.discovery)))
+		grpcOpts = append(grpcOpts, grpc.WithResolvers(discovery.NewBuilder(options.discovery, discovery.WithInsecure(insecure))))
 	}
 	if insecure {
 		grpcOpts = append(grpcOpts, grpc.WithInsecure())
+	}
+	if options.tlsConf != nil {
+		grpcOpts = append(grpcOpts, grpc.WithTransportCredentials(credentials.NewTLS(options.tlsConf)))
 	}
 	if len(options.grpcOpts) > 0 {
 		grpcOpts = append(grpcOpts, options.grpcOpts...)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/imdario/mergo"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -17,22 +18,27 @@ type Reader interface {
 	Merge(...*KeyValue) error
 	Value(string) (Value, bool)
 	Source() ([]byte, error)
+	Resolve() error
 }
 
 type reader struct {
 	opts   options
 	values map[string]interface{}
+	lock   sync.Mutex
 }
 
 func newReader(opts options) Reader {
 	return &reader{
 		opts:   opts,
 		values: make(map[string]interface{}),
+		lock:   sync.Mutex{},
 	}
 }
 
 func (r *reader) Merge(kvs ...*KeyValue) error {
+	r.lock.Lock()
 	merged, err := cloneMap(r.values)
+	r.lock.Unlock()
 	if err != nil {
 		return err
 	}
@@ -45,19 +51,28 @@ func (r *reader) Merge(kvs ...*KeyValue) error {
 			return err
 		}
 	}
-	if err := r.opts.resolver(merged); err != nil {
-		return err
-	}
+	r.lock.Lock()
 	r.values = merged
+	r.lock.Unlock()
 	return nil
 }
 
 func (r *reader) Value(path string) (Value, bool) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
 	return readValue(r.values, path)
 }
 
 func (r *reader) Source() ([]byte, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
 	return marshalJSON(convertMap(r.values))
+}
+
+func (r *reader) Resolve() error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	return r.opts.resolver(r.values)
 }
 
 func cloneMap(src map[string]interface{}) (map[string]interface{}, error) {
@@ -99,6 +114,9 @@ func convertMap(src interface{}) interface{} {
 			dst[k] = convertMap(v)
 		}
 		return dst
+	case []byte:
+		// there will be no binary data in the config data
+		return string(m)
 	default:
 		return src
 	}
