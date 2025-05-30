@@ -1,18 +1,16 @@
-// The package registry simply implements the Kubernetes-based Registry
+// Package kuberegistry registry simply implements the Kubernetes-based Registry
 package kuberegistry
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/go-kratos/kratos/v2/registry"
 	jsoniter "github.com/json-iterator/go"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,6 +20,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	listerv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/go-kratos/kratos/v2/registry"
 )
 
 // Defines the key name of specific fields
@@ -33,38 +33,37 @@ import (
 // kratos-service-protocols: define the protocols of the service
 //
 // Example Deployment:
-//
-// apiVersion: apps/v1
-// kind: Deployment
-// metadata:
-//  name: nginx
-//  labels:
-//    app: nginx
-// spec:
-//  replicas: 5
-//  selector:
-//    matchLabels:
-//      app: nginx
-//  template:
-//    metadata:
-//      labels:
-//        app: nginx
-//        kratos-service-id: "56991810-c77f-4a95-8190-393efa9c1a61"
-//        kratos-service-app: "nginx"
-//        kratos-service-version: "v3.5.0"
-//      annotations:
-//        kratos-service-protocols: |
-//          {"80": "http"}
-//        kratos-service-metadata: |
-//          {"region": "sh", "zone": "sh001", "cluster": "pd"}
-//    spec:
-//      containers:
-//        - name: nginx
-//          image: nginx:1.7.9
-//          ports:
-//            - containerPort: 80
-//
-//
+/*
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+name: nginx
+labels:
+  app: nginx
+spec:
+replicas: 5
+selector:
+  matchLabels:
+    app: nginx
+template:
+  metadata:
+    labels:
+      app: nginx
+      kratos-service-id: "56991810-c77f-4a95-8190-393efa9c1a61"
+      kratos-service-app: "nginx"
+      kratos-service-version: "v3.5.0"
+    annotations:
+      kratos-service-protocols: |
+        {"80": "http"}
+      kratos-service-metadata: |
+        {"region": "sh", "zone": "sh001", "cluster": "pd"}
+  spec:
+    containers:
+      - name: nginx
+        image: nginx:1.7.9
+        ports:
+          - containerPort: 80
+*/
 const (
 	// LabelsKeyServiceID is used to define the ID of the service
 	LabelsKeyServiceID = "kratos-service-id"
@@ -80,7 +79,7 @@ const (
 	AnnotationsKeyProtocolMap = "kratos-service-protocols"
 )
 
-// The registry simply implements service discovery based on Kubernetes
+// The Registry simply implements service discovery based on Kubernetes
 // It has not been verified in the production environment and is currently for reference only
 type Registry struct {
 	clientSet       *kubernetes.Clientset
@@ -92,8 +91,11 @@ type Registry struct {
 }
 
 // NewRegistry is used to initialize the Registry
-func NewRegistry(clientSet *kubernetes.Clientset) *Registry {
-	informerFactory := informers.NewSharedInformerFactory(clientSet, time.Minute*10)
+func NewRegistry(clientSet *kubernetes.Clientset, namespace string) *Registry {
+	if strings.EqualFold(namespace, "") {
+		namespace = metav1.NamespaceAll
+	}
+	informerFactory := informers.NewSharedInformerFactoryWithOptions(clientSet, time.Minute*10, informers.WithNamespace(namespace))
 	podInformer := informerFactory.Core().V1().Pods().Informer()
 	podLister := informerFactory.Core().V1().Pods().Lister()
 	return &Registry{
@@ -108,7 +110,7 @@ func NewRegistry(clientSet *kubernetes.Clientset) *Registry {
 // Register is used to register services
 // Note that on Kubernetes, it can only be used to update the id/name/version/metadata/protocols of the current service,
 // but it cannot be used to update node.
-func (s *Registry) Register(service *registry.ServiceInstance) error {
+func (s *Registry) Register(ctx context.Context, service *registry.ServiceInstance) error {
 	// GetMetadata
 	metadataVal, err := marshal(service.Metadata)
 	if err != nil {
@@ -125,7 +127,7 @@ func (s *Registry) Register(service *registry.ServiceInstance) error {
 		return err
 	}
 
-	patchBytes, err := jsoniter.Marshal(map[string]interface{}{
+	patchBytes, err := jsoniter.Marshal(map[string]any{
 		"metadata": metav1.ObjectMeta{
 			Labels: map[string]string{
 				LabelsKeyServiceID:      service.ID,
@@ -145,28 +147,28 @@ func (s *Registry) Register(service *registry.ServiceInstance) error {
 	if _, err = s.clientSet.
 		CoreV1().
 		Pods(GetNamespace()).
-		Patch(context.TODO(), GetPodName(), types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{}); err != nil {
+		Patch(ctx, GetPodName(), types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{}); err != nil {
 		return err
 	}
 	return nil
 }
 
 // Deregister the registration.
-func (s *Registry) Deregister(service *registry.ServiceInstance) error {
-	return s.Register(&registry.ServiceInstance{
+func (s *Registry) Deregister(ctx context.Context, _ *registry.ServiceInstance) error {
+	return s.Register(ctx, &registry.ServiceInstance{
 		Metadata: map[string]string{},
 	})
 }
 
-// Service return the service instances in memory according to the service name.
-func (s *Registry) Service(name string) ([]*registry.ServiceInstance, error) {
+// GetService return the service instances in memory according to the service name.
+func (s *Registry) GetService(_ context.Context, name string) ([]*registry.ServiceInstance, error) {
 	pods, err := s.podLister.List(labels.SelectorFromSet(map[string]string{
 		LabelsKeyServiceName: name,
 	}))
 	if err != nil {
 		return nil, err
 	}
-	var ret []*registry.ServiceInstance
+	ret := make([]*registry.ServiceInstance, 0, len(pods))
 	for _, pod := range pods {
 		if pod.Status.Phase != corev1.PodRunning {
 			continue
@@ -180,8 +182,8 @@ func (s *Registry) Service(name string) ([]*registry.ServiceInstance, error) {
 	return ret, nil
 }
 
-func (s *Registry) sendLatestInstances(name string, announcement chan []*registry.ServiceInstance) {
-	instances, err := s.Service(name)
+func (s *Registry) sendLatestInstances(ctx context.Context, name string, announcement chan []*registry.ServiceInstance) {
+	instances, err := s.GetService(ctx, name)
 	if err != nil {
 		panic(err)
 	}
@@ -189,11 +191,11 @@ func (s *Registry) sendLatestInstances(name string, announcement chan []*registr
 }
 
 // Watch creates a watcher according to the service name.
-func (s *Registry) Watch(name string) (registry.Watcher, error) {
+func (s *Registry) Watch(ctx context.Context, name string) (registry.Watcher, error) {
 	stopCh := make(chan struct{}, 1)
 	announcement := make(chan []*registry.ServiceInstance, 1)
 	s.podInformer.AddEventHandler(cache.FilteringResourceEventHandler{
-		FilterFunc: func(obj interface{}) bool {
+		FilterFunc: func(obj any) bool {
 			select {
 			case <-stopCh:
 				return false
@@ -206,14 +208,14 @@ func (s *Registry) Watch(name string) (registry.Watcher, error) {
 			}
 		},
 		Handler: cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				s.sendLatestInstances(name, announcement)
+			AddFunc: func(any) {
+				s.sendLatestInstances(ctx, name, announcement)
 			},
-			UpdateFunc: func(oldObj, newObj interface{}) {
-				s.sendLatestInstances(name, announcement)
+			UpdateFunc: func(any, any) {
+				s.sendLatestInstances(ctx, name, announcement)
 			},
-			DeleteFunc: func(obj interface{}) {
-				s.sendLatestInstances(name, announcement)
+			DeleteFunc: func(any) {
+				s.sendLatestInstances(ctx, name, announcement)
 			},
 		},
 	})
@@ -248,7 +250,7 @@ var currentNamespace = LoadNamespace()
 
 // LoadNamespace is used to get the current namespace from the file
 func LoadNamespace() string {
-	data, err := ioutil.ReadFile(ServiceAccountNamespacePath)
+	data, err := os.ReadFile(ServiceAccountNamespacePath)
 	if err != nil {
 		return ""
 	}
@@ -260,7 +262,7 @@ func GetNamespace() string {
 	return currentNamespace
 }
 
-// GetNamespace is used to get the name of the Pod where the current container is located
+// GetPodName is used to get the name of the Pod where the current container is located
 func GetPodName() string {
 	return os.Getenv("HOSTNAME")
 }
@@ -301,7 +303,7 @@ func (iter *Iterator) Next() ([]*registry.ServiceInstance, error) {
 	}
 }
 
-// Close is used to close the iterator
+// Stop is used to close the iterator
 func (iter *Iterator) Stop() error {
 	select {
 	case <-iter.stopCh:
@@ -313,11 +315,11 @@ func (iter *Iterator) Stop() error {
 
 // //////////// Helper Func ////////////
 
-func marshal(in interface{}) (string, error) {
+func marshal(in any) (string, error) {
 	return jsoniter.MarshalToString(in)
 }
 
-func unmarshal(data string, in interface{}) error {
+func unmarshal(data string, in any) error {
 	return jsoniter.UnmarshalFromString(data, in)
 }
 
@@ -342,14 +344,14 @@ func getProtocolMapByEndpoints(endpoints []string) (protocolMap, error) {
 }
 
 func getProtocolMapFromPod(pod *corev1.Pod) (protocolMap, error) {
-	protocolMap := protocolMap{}
+	protoMap := protocolMap{}
 	if s := pod.Annotations[AnnotationsKeyProtocolMap]; !isEmptyObjectString(s) {
-		err := unmarshal(s, &protocolMap)
+		err := unmarshal(s, &protoMap)
 		if err != nil {
 			return nil, &ErrorHandleResource{Namespace: pod.Namespace, Name: pod.Name, Reason: err}
 		}
 	}
-	return protocolMap, nil
+	return protoMap, nil
 }
 
 func getMetadataFromPod(pod *corev1.Pod) (map[string]string, error) {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fluent/fluent-logger-golang/fluent"
+
 	"github.com/go-kratos/kratos/v2/log"
 )
 
@@ -99,33 +100,34 @@ type Logger struct {
 
 // NewLogger new a std logger with options.
 // target:
-//   tcp://127.0.0.1:24224
-//   unix://var/run/fluent/fluent.sock
+//
+//	tcp://127.0.0.1:24224
+//	unix://var/run/fluent/fluent.sock
 func NewLogger(addr string, opts ...Option) (*Logger, error) {
-	options := options{}
+	option := options{}
 	for _, o := range opts {
-		o(&options)
+		o(&option)
 	}
 	u, err := url.Parse(addr)
 	if err != nil {
 		return nil, err
 	}
 	c := fluent.Config{
-		Timeout:            options.timeout,
-		WriteTimeout:       options.writeTimeout,
-		BufferLimit:        options.bufferLimit,
-		RetryWait:          options.retryWait,
-		MaxRetry:           options.maxRetry,
-		MaxRetryWait:       options.maxRetryWait,
-		TagPrefix:          options.tagPrefix,
-		Async:              options.async,
-		ForceStopAsyncSend: options.forceStopAsyncSend,
+		Timeout:            option.timeout,
+		WriteTimeout:       option.writeTimeout,
+		BufferLimit:        option.bufferLimit,
+		RetryWait:          option.retryWait,
+		MaxRetry:           option.maxRetry,
+		MaxRetryWait:       option.maxRetryWait,
+		TagPrefix:          option.tagPrefix,
+		Async:              option.async,
+		ForceStopAsyncSend: option.forceStopAsyncSend,
 	}
 	switch u.Scheme {
 	case "tcp":
-		host, port, err := net.SplitHostPort(u.Host)
-		if err != nil {
-			return nil, err
+		host, port, err2 := net.SplitHostPort(u.Host)
+		if err2 != nil {
+			return nil, err2
 		}
 		if c.FluentPort, err = strconv.Atoi(port); err != nil {
 			return nil, err
@@ -143,13 +145,13 @@ func NewLogger(addr string, opts ...Option) (*Logger, error) {
 		return nil, err
 	}
 	return &Logger{
-		opts: options,
+		opts: option,
 		log:  fl,
 	}, nil
 }
 
 // Log print the kv pairs log.
-func (l *Logger) Log(level log.Level, keyvals ...interface{}) error {
+func (l *Logger) Log(level log.Level, keyvals ...any) error {
 	if len(keyvals) == 0 {
 		return nil
 	}

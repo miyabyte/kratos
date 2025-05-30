@@ -2,9 +2,8 @@ package add
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
-	"path"
+	"path/filepath"
 )
 
 // Proto is a proto generator.
@@ -27,15 +26,15 @@ func (p *Proto) Generate() error {
 	if err != nil {
 		panic(err)
 	}
-	to := path.Join(wd, p.Path)
+	to := filepath.Join(wd, p.Path)
 	if _, err := os.Stat(to); os.IsNotExist(err) {
-		if err := os.MkdirAll(to, 0700); err != nil {
+		if err := os.MkdirAll(to, 0o700); err != nil {
 			return err
 		}
 	}
-	name := path.Join(to, p.Name)
+	name := filepath.Join(to, p.Name)
 	if _, err := os.Stat(name); !os.IsNotExist(err) {
 		return fmt.Errorf("%s already exists", p.Name)
 	}
-	return ioutil.WriteFile(name, body, 0644)
+	return os.WriteFile(name, body, 0o644)
 }

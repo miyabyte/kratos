@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 
-	"github.com/go-kratos/kratos/v2/config"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/go-kratos/kratos/v2/config"
 )
 
 // Option is kubernetes option.
@@ -116,9 +119,12 @@ func (k *kube) load() (kvs []*config.KeyValue, err error) {
 
 func (k *kube) configMap(cm v1.ConfigMap) (kvs []*config.KeyValue) {
 	for name, val := range cm.Data {
+		k := fmt.Sprintf("%s/%s/%s", k.opts.Namespace, cm.Name, name)
+
 		kvs = append(kvs, &config.KeyValue{
-			Key:   fmt.Sprintf("%s/%s/%s", k.opts.Namespace, cm.Name, name),
-			Value: []byte(val),
+			Key:    k,
+			Value:  []byte(val),
+			Format: strings.TrimPrefix(filepath.Ext(k), "."),
 		})
 	}
 	return kvs

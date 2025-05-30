@@ -7,7 +7,7 @@ import (
 )
 
 type Plain struct {
-	V interface{}
+	V any
 }
 
 type NestedOrder struct {
@@ -19,13 +19,13 @@ type NestedOrder struct {
 
 func TestCodec_Marshal(t *testing.T) {
 	tests := []struct {
-		Value     interface{}
+		Value     any
 		ExpectXML string
 	}{
 		// Test value types
 		{Value: &Plain{true}, ExpectXML: `<Plain><V>true</V></Plain>`},
 		{Value: &Plain{false}, ExpectXML: `<Plain><V>false</V></Plain>`},
-		{Value: &Plain{int(42)}, ExpectXML: `<Plain><V>42</V></Plain>`},
+		{Value: &Plain{42}, ExpectXML: `<Plain><V>42</V></Plain>`},
 		{
 			Value: &NestedOrder{Field1: "C", Field2: "B", Field3: "A"},
 			ExpectXML: `<result>` +
@@ -54,7 +54,7 @@ func TestCodec_Marshal(t *testing.T) {
 
 func TestCodec_Unmarshal(t *testing.T) {
 	tests := []struct {
-		want     interface{}
+		want     any
 		InputXML string
 	}{
 		{
@@ -85,7 +85,7 @@ func TestCodec_Unmarshal(t *testing.T) {
 
 func TestCodec_NilUnmarshal(t *testing.T) {
 	tests := []struct {
-		want     interface{}
+		want     any
 		InputXML string
 	}{
 		{

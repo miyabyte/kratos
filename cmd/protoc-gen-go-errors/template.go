@@ -2,30 +2,22 @@ package main
 
 import (
 	"bytes"
+	_ "embed"
 	"text/template"
 )
 
-var errorsTemplate = `
-{{ range .Errors }}
-
-func Is{{.CamelValue}}(err error) bool {
-	e := errors.FromError(err)
-	return e.Reason == {{.Name}}_{{.Value}}.String() && e.Code == {{.HttpCode}} 
-}
-
-func Error{{.CamelValue}}(format string, args ...interface{}) *errors.Error {
-	 return errors.New({{.HttpCode}}, {{.Name}}_{{.Value}}.String(), fmt.Sprintf(format, args...))
-}
-
-{{- end }}
-`
+//go:embed errorsTemplate.tpl
+var errorsTemplate string
 
 type errorInfo struct {
 	Name       string
 	Value      string
-	HttpCode   int
+	HTTPCode   int
 	CamelValue string
+	Comment    string
+	HasComment bool
 }
+
 type errorWrapper struct {
 	Errors []*errorInfo
 }
@@ -39,5 +31,5 @@ func (e *errorWrapper) execute() string {
 	if err := tmpl.Execute(buf, e); err != nil {
 		panic(err)
 	}
-	return string(buf.Bytes())
+	return buf.String()
 }

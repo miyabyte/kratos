@@ -7,34 +7,34 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"time"
 
-	"google.golang.org/genproto/protobuf/field_mask"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
-	"google.golang.org/protobuf/types/known/wrapperspb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
-// EncodeMap encode proto message to url query.
-func EncodeMap(msg proto.Message) (url.Values, error) {
+// EncodeValues encode a message into url values.
+func EncodeValues(msg any) (url.Values, error) {
 	if msg == nil || (reflect.ValueOf(msg).Kind() == reflect.Ptr && reflect.ValueOf(msg).IsNil()) {
 		return url.Values{}, nil
 	}
-	u := make(url.Values)
-	err := encodeByField(u, "", msg.ProtoReflect())
-	if err != nil {
-		return nil, err
+	if v, ok := msg.(proto.Message); ok {
+		u := make(url.Values)
+		err := encodeByField(u, "", v.ProtoReflect())
+		if err != nil {
+			return nil, err
+		}
+		return u, nil
 	}
-	return u, nil
+	return encoder.Encode(msg)
 }
 
-func encodeByField(u url.Values, path string, v protoreflect.Message) error {
-	for i := 0; i < v.Descriptor().Fields().Len(); i++ {
-		fd := v.Descriptor().Fields().Get(i)
-		var key string
-		var newPath string
+func encodeByField(u url.Values, path string, m protoreflect.Message) (finalErr error) {
+	m.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		var (
+			key     string
+			newPath string
+		)
 		if fd.HasJSONName() {
 			key = fd.JSONName()
 		} else {
@@ -45,77 +45,77 @@ func encodeByField(u url.Values, path string, v protoreflect.Message) error {
 		} else {
 			newPath = path + "." + key
 		}
-
 		if of := fd.ContainingOneof(); of != nil {
-			if f := v.WhichOneof(of); f != nil {
-				if f != fd {
-					continue
-				}
+			if f := m.WhichOneof(of); f != nil && f != fd {
+				return true
 			}
-			continue
 		}
 		switch {
 		case fd.IsList():
-			if v.Get(fd).List().Len() > 0 {
-				list, err := encodeRepeatedField(fd, v.Get(fd).List())
+			if v.List().Len() > 0 {
+				list, err := encodeRepeatedField(fd, v.List())
 				if err != nil {
-					return err
+					finalErr = err
+					return false
 				}
-				u[newPath] = list
+				for _, item := range list {
+					u.Add(newPath, item)
+				}
 			}
 		case fd.IsMap():
-			if v.Get(fd).Map().Len() > 0 {
-				m, err := encodeMapField(fd, v.Get(fd).Map())
+			if v.Map().Len() > 0 {
+				m, err := encodeMapField(fd, v.Map())
 				if err != nil {
-					return err
+					finalErr = err
+					return false
 				}
 				for k, value := range m {
-					u[fmt.Sprintf("%s[%s]", newPath, k)] = []string{value}
+					u.Set(fmt.Sprintf("%s[%s]", newPath, k), value)
 				}
 			}
 		case (fd.Kind() == protoreflect.MessageKind) || (fd.Kind() == protoreflect.GroupKind):
-			value, err := encodeMessage(fd.Message(), v.Get(fd))
+			value, err := encodeMessage(fd.Message(), v)
 			if err == nil {
-				u[newPath] = []string{value}
-				continue
+				u.Set(newPath, value)
+				return true
 			}
-			err = encodeByField(u, newPath, v.Get(fd).Message())
-			if err != nil {
-				return err
+			if err = encodeByField(u, newPath, v.Message()); err != nil {
+				finalErr = err
+				return false
 			}
 		default:
-			value, err := encodeField(fd, v.Get(fd))
+			value, err := EncodeField(fd, v)
 			if err != nil {
-				return err
+				finalErr = err
+				return false
 			}
-			u[newPath] = []string{value}
+			u.Set(newPath, value)
 		}
-	}
-
-	return nil
+		return true
+	})
+	return
 }
 
 func encodeRepeatedField(fieldDescriptor protoreflect.FieldDescriptor, list protoreflect.List) ([]string, error) {
 	var values []string
 	for i := 0; i < list.Len(); i++ {
-		value, err := encodeField(fieldDescriptor, list.Get(i))
+		value, err := EncodeField(fieldDescriptor, list.Get(i))
 		if err != nil {
 			return nil, err
 		}
 		values = append(values, value)
 	}
-
 	return values, nil
 }
 
 func encodeMapField(fieldDescriptor protoreflect.FieldDescriptor, mp protoreflect.Map) (map[string]string, error) {
 	m := make(map[string]string)
 	mp.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
-		key, err := encodeField(fieldDescriptor.MapValue(), k.Value())
+		key, err := EncodeField(fieldDescriptor.MapKey(), k.Value())
 		if err != nil {
 			return false
 		}
-		value, err := encodeField(fieldDescriptor.MapValue(), v)
+		value, err := EncodeField(fieldDescriptor.MapValue(), v)
 		if err != nil {
 			return false
 		}
@@ -126,7 +126,8 @@ func encodeMapField(fieldDescriptor protoreflect.FieldDescriptor, mp protoreflec
 	return m, nil
 }
 
-func encodeField(fieldDescriptor protoreflect.FieldDescriptor, value protoreflect.Value) (string, error) {
+// EncodeField encode proto message filed
+func EncodeField(fieldDescriptor protoreflect.FieldDescriptor, value protoreflect.Value) (string, error) {
 	switch fieldDescriptor.Kind() {
 	case protoreflect.BoolKind:
 		return strconv.FormatBool(value.Bool()), nil
@@ -136,52 +137,89 @@ func encodeField(fieldDescriptor protoreflect.FieldDescriptor, value protoreflec
 		}
 		desc := fieldDescriptor.Enum().Values().ByNumber(value.Enum())
 		return string(desc.Name()), nil
-	case protoreflect.StringKind:
-		return value.String(), nil
 	case protoreflect.BytesKind:
 		return base64.URLEncoding.EncodeToString(value.Bytes()), nil
 	case protoreflect.MessageKind, protoreflect.GroupKind:
 		return encodeMessage(fieldDescriptor.Message(), value)
 	default:
-		return fmt.Sprintf("%v", value.Interface()), nil
+		return value.String(), nil
 	}
 }
 
-// marshalMessage marshals the fields in the given protoreflect.Message.
+// encodeMessage marshals the fields in the given protoreflect.Message.
 // If the typeURL is non-empty, then a synthetic "@type" field is injected
 // containing the URL as the value.
 func encodeMessage(msgDescriptor protoreflect.MessageDescriptor, value protoreflect.Value) (string, error) {
 	switch msgDescriptor.FullName() {
-	case "google.protobuf.Timestamp":
-		t, ok := value.Interface().(*timestamppb.Timestamp)
-		if !ok {
-			return "", nil
-		}
-		return t.AsTime().Format(time.RFC3339Nano), nil
-	case "google.protobuf.Duration":
-		d, ok := value.Interface().(*durationpb.Duration)
-		if !ok {
-			return "", nil
-		}
-		return d.AsDuration().String(), nil
-	case "google.protobuf.BytesValue":
-		b, ok := value.Interface().(*wrapperspb.BytesValue)
-		if !ok {
-			return "", nil
-		}
-		return base64.StdEncoding.EncodeToString(b.Value), nil
+	case timestampMessageFullname:
+		return marshalTimestamp(value.Message())
+	case durationMessageFullname:
+		return marshalDuration(value.Message())
+	case bytesMessageFullname:
+		return marshalBytes(value.Message())
 	case "google.protobuf.DoubleValue", "google.protobuf.FloatValue", "google.protobuf.Int64Value", "google.protobuf.Int32Value",
 		"google.protobuf.UInt64Value", "google.protobuf.UInt32Value", "google.protobuf.BoolValue", "google.protobuf.StringValue":
 		fd := msgDescriptor.Fields()
-		v := value.Message().Get(fd.ByName(protoreflect.Name("value"))).Message()
-		return fmt.Sprintf("%v", v.Interface()), nil
-	case "google.protobuf.FieldMask":
-		m, ok := value.Interface().(*field_mask.FieldMask)
-		if !ok {
+		v := value.Message().Get(fd.ByName("value"))
+		return fmt.Sprint(v.Interface()), nil
+	case fieldMaskFullName:
+		m, ok := value.Message().Interface().(*fieldmaskpb.FieldMask)
+		if !ok || m == nil {
 			return "", nil
+		}
+		for i, v := range m.Paths {
+			m.Paths[i] = jsonCamelCase(v)
 		}
 		return strings.Join(m.Paths, ","), nil
 	default:
 		return "", fmt.Errorf("unsupported message type: %q", string(msgDescriptor.FullName()))
 	}
+}
+
+// EncodeFieldMask return field mask name=paths
+func EncodeFieldMask(m protoreflect.Message) (query string) {
+	m.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		if fd.Kind() == protoreflect.MessageKind {
+			if msg := fd.Message(); msg.FullName() == fieldMaskFullName {
+				value, err := encodeMessage(msg, v)
+				if err != nil {
+					return false
+				}
+				if fd.HasJSONName() {
+					query = fd.JSONName() + "=" + value
+				} else {
+					query = fd.TextName() + "=" + value
+				}
+				return false
+			}
+		}
+		return true
+	})
+	return
+}
+
+// jsonCamelCase converts a snake_case identifier to a camelCase identifier,
+// according to the protobuf JSON specification.
+// references: https://github.com/protocolbuffers/protobuf-go/blob/master/encoding/protojson/well_known_types.go#L842
+func jsonCamelCase(s string) string {
+	var builder strings.Builder
+	builder.Grow(len(s))
+
+	wasUnderscore := false
+	for i := 0; i < len(s); i++ { // proto identifiers are always ASCIIS
+		c := s[i]
+		if c != '_' {
+			if wasUnderscore && isASCIILower(c) {
+				c -= 'a' - 'A' // convert to uppercase
+			}
+			builder.WriteByte(c)
+		}
+		wasUnderscore = c == '_'
+	}
+
+	return builder.String()
+}
+
+func isASCIILower(c byte) bool {
+	return 'a' <= c && c <= 'z'
 }

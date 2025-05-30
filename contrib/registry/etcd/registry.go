@@ -6,13 +6,14 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/go-kratos/kratos/v2/registry"
 	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/go-kratos/kratos/v2/registry"
 )
 
 var (
-	_ registry.Registrar = &Registry{}
-	_ registry.Discovery = &Registry{}
+	_ registry.Registrar = (*Registry)(nil)
+	_ registry.Discovery = (*Registry)(nil)
 )
 
 // Option is etcd registry option.
@@ -50,6 +51,16 @@ type Registry struct {
 	client *clientv3.Client
 	kv     clientv3.KV
 	lease  clientv3.Lease
+	/*
+		ctxMap is used to store the context cancel function of each service instance.
+		When the service instance is deregistered, the corresponding context cancel function is called to stop the heartbeat.
+	*/
+	ctxMap map[string]*serviceCancel
+}
+
+type serviceCancel struct {
+	service *registry.ServiceInstance
+	cancel  context.CancelFunc
 }
 
 // New creates etcd registry
@@ -67,12 +78,13 @@ func New(client *clientv3.Client, opts ...Option) (r *Registry) {
 		opts:   op,
 		client: client,
 		kv:     clientv3.NewKV(client),
+		ctxMap: make(map[string]*serviceCancel),
 	}
 }
 
 // Register the registration.
 func (r *Registry) Register(ctx context.Context, service *registry.ServiceInstance) error {
-	key := fmt.Sprintf("%s/%s/%s", r.opts.namespace, service.Name, service.ID)
+	key := r.registerKey(service)
 	value, err := marshal(service)
 	if err != nil {
 		return err
@@ -86,8 +98,17 @@ func (r *Registry) Register(ctx context.Context, service *registry.ServiceInstan
 		return err
 	}
 
-	go r.heartBeat(r.opts.ctx, leaseID, key, value)
+	hctx, cancel := context.WithCancel(r.opts.ctx)
+	r.ctxMap[key] = &serviceCancel{
+		service: service,
+		cancel:  cancel,
+	}
+	go r.heartBeat(hctx, leaseID, key, value)
 	return nil
+}
+
+func (r *Registry) registerKey(service *registry.ServiceInstance) string {
+	return fmt.Sprintf("%s/%s/%s", r.opts.namespace, service.Name, service.ID)
 }
 
 // Deregister the registration.
@@ -97,33 +118,45 @@ func (r *Registry) Deregister(ctx context.Context, service *registry.ServiceInst
 			r.lease.Close()
 		}
 	}()
-	key := fmt.Sprintf("%s/%s/%s", r.opts.namespace, service.Name, service.ID)
+	// cancel heartbeat
+	key := r.registerKey(service)
+	if serviceCancel, ok := r.ctxMap[key]; ok {
+		serviceCancel.cancel()
+		delete(r.ctxMap, key)
+	}
 	_, err := r.client.Delete(ctx, key)
 	return err
 }
 
 // GetService return the service instances in memory according to the service name.
 func (r *Registry) GetService(ctx context.Context, name string) ([]*registry.ServiceInstance, error) {
-	key := fmt.Sprintf("%s/%s", r.opts.namespace, name)
+	key := r.serviceKey(name)
 	resp, err := r.kv.Get(ctx, key, clientv3.WithPrefix())
 	if err != nil {
 		return nil, err
 	}
-	var items []*registry.ServiceInstance
+	items := make([]*registry.ServiceInstance, 0, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		si, err := unmarshal(kv.Value)
 		if err != nil {
 			return nil, err
+		}
+		if si.Name != name {
+			continue
 		}
 		items = append(items, si)
 	}
 	return items, nil
 }
 
+func (r *Registry) serviceKey(name string) string {
+	return fmt.Sprintf("%s/%s", r.opts.namespace, name)
+}
+
 // Watch creates a watcher according to the service name.
 func (r *Registry) Watch(ctx context.Context, name string) (registry.Watcher, error) {
-	key := fmt.Sprintf("%s/%s", r.opts.namespace, name)
-	return newWatcher(ctx, key, r.client), nil
+	key := r.serviceKey(name)
+	return newWatcher(ctx, key, name, r.client)
 }
 
 // registerWithKV create a new lease, return current leaseID
@@ -145,12 +178,12 @@ func (r *Registry) heartBeat(ctx context.Context, leaseID clientv3.LeaseID, key 
 	if err != nil {
 		curLeaseID = 0
 	}
-	rand.Seed(time.Now().Unix())
+	randSource := rand.New(rand.NewSource(time.Now().Unix()))
 
 	for {
 		if curLeaseID == 0 {
 			// try to registerWithKV
-			retreat := []int{}
+			var retreat []int
 			for retryCnt := 0; retryCnt < r.opts.maxRetry; retryCnt++ {
 				if ctx.Err() != nil {
 					return
@@ -161,9 +194,9 @@ func (r *Registry) heartBeat(ctx context.Context, leaseID clientv3.LeaseID, key 
 				cancelCtx, cancel := context.WithCancel(ctx)
 				go func() {
 					defer cancel()
-					id, err := r.registerWithKV(cancelCtx, key, value)
-					if err != nil {
-						errChan <- err
+					id, registerErr := r.registerWithKV(cancelCtx, key, value)
+					if registerErr != nil {
+						errChan <- registerErr
 					} else {
 						idChan <- id
 					}
@@ -183,7 +216,7 @@ func (r *Registry) heartBeat(ctx context.Context, leaseID clientv3.LeaseID, key 
 					break
 				}
 				retreat = append(retreat, 1<<retryCnt)
-				time.Sleep(time.Duration(retreat[rand.Intn(len(retreat))]) * time.Second)
+				time.Sleep(time.Duration(retreat[randSource.Intn(len(retreat))]) * time.Second)
 			}
 			if _, ok := <-kac; !ok {
 				// retry failed

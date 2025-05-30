@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"reflect"
 
-	"github.com/go-kratos/kratos/v2/encoding"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/go-kratos/kratos/v2/encoding"
 )
 
 // Name is the name registered for the json codec.
@@ -30,7 +31,7 @@ func init() {
 // codec is a Codec implementation with json.
 type codec struct{}
 
-func (codec) Marshal(v interface{}) ([]byte, error) {
+func (codec) Marshal(v any) ([]byte, error) {
 	switch m := v.(type) {
 	case json.Marshaler:
 		return m.MarshalJSON()
@@ -41,7 +42,7 @@ func (codec) Marshal(v interface{}) ([]byte, error) {
 	}
 }
 
-func (codec) Unmarshal(data []byte, v interface{}) error {
+func (codec) Unmarshal(data []byte, v any) error {
 	switch m := v.(type) {
 	case json.Unmarshaler:
 		return m.UnmarshalJSON(data)

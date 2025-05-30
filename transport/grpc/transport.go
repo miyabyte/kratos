@@ -1,11 +1,13 @@
 package grpc
 
 import (
-	"github.com/go-kratos/kratos/v2/transport"
 	"google.golang.org/grpc/metadata"
+
+	"github.com/go-kratos/kratos/v2/selector"
+	"github.com/go-kratos/kratos/v2/transport"
 )
 
-var _ transport.Transporter = &Transport{}
+var _ transport.Transporter = (*Transport)(nil)
 
 // Transport is a gRPC transport.
 type Transport struct {
@@ -13,6 +15,7 @@ type Transport struct {
 	operation   string
 	reqHeader   headerCarrier
 	replyHeader headerCarrier
+	nodeFilters []selector.NodeFilter
 }
 
 // Kind returns the transport kind.
@@ -40,6 +43,11 @@ func (tr *Transport) ReplyHeader() transport.Header {
 	return tr.replyHeader
 }
 
+// NodeFilters returns the client select filters.
+func (tr *Transport) NodeFilters() []selector.NodeFilter {
+	return tr.nodeFilters
+}
+
 type headerCarrier metadata.MD
 
 // Get returns the value associated with the passed key.
@@ -56,6 +64,11 @@ func (mc headerCarrier) Set(key string, value string) {
 	metadata.MD(mc).Set(key, value)
 }
 
+// Add append value to key-values pair.
+func (mc headerCarrier) Add(key string, value string) {
+	metadata.MD(mc).Append(key, value)
+}
+
 // Keys lists the keys stored in this carrier.
 func (mc headerCarrier) Keys() []string {
 	keys := make([]string, 0, len(mc))
@@ -63,4 +76,9 @@ func (mc headerCarrier) Keys() []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// Values returns a slice of values associated with the passed key.
+func (mc headerCarrier) Values(key string) []string {
+	return metadata.MD(mc).Get(key)
 }

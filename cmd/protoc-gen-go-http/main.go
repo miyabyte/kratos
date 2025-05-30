@@ -4,20 +4,20 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/go-kratos/kratos/v2"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/types/pluginpb"
 )
 
 var (
-	showVersion = flag.Bool("version", false, "print the version and exit")
-	omitempty   = flag.Bool("omitempty", true, "omit if google.api is empty")
+	showVersion     = flag.Bool("version", false, "print the version and exit")
+	omitempty       = flag.Bool("omitempty", true, "omit if google.api is empty")
+	omitemptyPrefix = flag.String("omitempty_prefix", "", "omit if google.api is empty")
 )
 
 func main() {
 	flag.Parse()
 	if *showVersion {
-		fmt.Printf("protoc-gen-go-http %v\n", kratos.Release)
+		fmt.Printf("protoc-gen-go-http %v\n", release)
 		return
 	}
 	protogen.Options{
@@ -28,7 +28,7 @@ func main() {
 			if !f.Generate {
 				continue
 			}
-			generateFile(gen, f, *omitempty)
+			generateFile(gen, f, *omitempty, *omitemptyPrefix)
 		}
 		return nil
 	})

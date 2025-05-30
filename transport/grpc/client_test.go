@@ -3,27 +3,32 @@ package grpc
 import (
 	"context"
 	"crypto/tls"
+	"reflect"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/registry"
-	"github.com/stretchr/testify/assert"
-	"google.golang.org/grpc"
 )
 
 func TestWithEndpoint(t *testing.T) {
 	o := &clientOptions{}
 	v := "abc"
 	WithEndpoint(v)(o)
-	assert.Equal(t, v, o.endpoint)
+	if !reflect.DeepEqual(v, o.endpoint) {
+		t.Errorf("expect %v but got %v", v, o.endpoint)
+	}
 }
 
 func TestWithTimeout(t *testing.T) {
 	o := &clientOptions{}
 	v := time.Duration(123)
 	WithTimeout(v)(o)
-	assert.Equal(t, v, o.timeout)
+	if !reflect.DeepEqual(v, o.timeout) {
+		t.Errorf("expect %v but got %v", v, o.timeout)
+	}
 }
 
 func TestWithMiddleware(t *testing.T) {
@@ -32,16 +37,18 @@ func TestWithMiddleware(t *testing.T) {
 		func(middleware.Handler) middleware.Handler { return nil },
 	}
 	WithMiddleware(v...)(o)
-	assert.Equal(t, v, o.middleware)
+	if !reflect.DeepEqual(v, o.middleware) {
+		t.Errorf("expect %v but got %v", v, o.middleware)
+	}
 }
 
 type mockRegistry struct{}
 
-func (m *mockRegistry) GetService(ctx context.Context, serviceName string) ([]*registry.ServiceInstance, error) {
+func (m *mockRegistry) GetService(_ context.Context, _ string) ([]*registry.ServiceInstance, error) {
 	return nil, nil
 }
 
-func (m *mockRegistry) Watch(ctx context.Context, serviceName string) (registry.Watcher, error) {
+func (m *mockRegistry) Watch(_ context.Context, _ string) (registry.Watcher, error) {
 	return nil, nil
 }
 
@@ -49,50 +56,56 @@ func TestWithDiscovery(t *testing.T) {
 	o := &clientOptions{}
 	v := &mockRegistry{}
 	WithDiscovery(v)(o)
-	assert.Equal(t, v, o.discovery)
+	if !reflect.DeepEqual(v, o.discovery) {
+		t.Errorf("expect %v but got %v", v, o.discovery)
+	}
 }
 
 func TestWithTLSConfig(t *testing.T) {
 	o := &clientOptions{}
 	v := &tls.Config{}
 	WithTLSConfig(v)(o)
-	assert.Equal(t, v, o.tlsConf)
+	if !reflect.DeepEqual(v, o.tlsConf) {
+		t.Errorf("expect %v but got %v", v, o.tlsConf)
+	}
 }
 
 func EmptyMiddleware() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+		return func(ctx context.Context, req any) (reply any, err error) {
 			return handler(ctx, req)
 		}
 	}
 }
 
 func TestUnaryClientInterceptor(t *testing.T) {
-	f := unaryClientInterceptor([]middleware.Middleware{EmptyMiddleware()}, time.Duration(100))
+	f := unaryClientInterceptor([]middleware.Middleware{EmptyMiddleware()}, time.Duration(100), nil)
 	req := &struct{}{}
 	resp := &struct{}{}
 
 	err := f(context.TODO(), "hello", req, resp, &grpc.ClientConn{},
-		func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+		func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
 			return nil
 		})
-	assert.NoError(t, err)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestWithUnaryInterceptor(t *testing.T) {
 	o := &clientOptions{}
 	v := []grpc.UnaryClientInterceptor{
-		func(ctx context.Context, method string, req, reply interface{},
-			cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		func(context.Context, string, any, any, *grpc.ClientConn, grpc.UnaryInvoker, ...grpc.CallOption) error {
 			return nil
 		},
-		func(ctx context.Context, method string, req, reply interface{},
-			cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		func(context.Context, string, any, any, *grpc.ClientConn, grpc.UnaryInvoker, ...grpc.CallOption) error {
 			return nil
 		},
 	}
 	WithUnaryInterceptor(v...)(o)
-	assert.Equal(t, v, o.ints)
+	if !reflect.DeepEqual(v, o.ints) {
+		t.Errorf("expect %v but got %v", v, o.ints)
+	}
 }
 
 func TestWithOptions(t *testing.T) {
@@ -101,7 +114,19 @@ func TestWithOptions(t *testing.T) {
 		grpc.EmptyDialOption{},
 	}
 	WithOptions(v...)(o)
-	assert.Equal(t, v, o.grpcOpts)
+	if !reflect.DeepEqual(v, o.grpcOpts) {
+		t.Errorf("expect %v but got %v", v, o.grpcOpts)
+	}
+}
+
+func TestWithHealthCheck(t *testing.T) {
+	o := &clientOptions{
+		healthCheckConfig: `,"healthCheckConfig":{"serviceName":""}`,
+	}
+	WithHealthCheck(false)(o)
+	if !reflect.DeepEqual("", o.healthCheckConfig) {
+		t.Errorf("expect %v but got %v", "", o.healthCheckConfig)
+	}
 }
 
 func TestDial(t *testing.T) {
@@ -110,5 +135,21 @@ func TestDial(t *testing.T) {
 		grpc.EmptyDialOption{},
 	}
 	WithOptions(v...)(o)
-	assert.Equal(t, v, o.grpcOpts)
+	if !reflect.DeepEqual(v, o.grpcOpts) {
+		t.Errorf("expect %v but got %v", v, o.grpcOpts)
+	}
+}
+
+func TestDialConn(t *testing.T) {
+	_, err := dial(
+		context.Background(),
+		true,
+		WithDiscovery(&mockRegistry{}),
+		WithTimeout(10*time.Second),
+		WithEndpoint("abc"),
+		WithMiddleware(EmptyMiddleware()),
+	)
+	if err != nil {
+		t.Error(err)
+	}
 }

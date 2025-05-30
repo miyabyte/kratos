@@ -4,8 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/go-kratos/kratos/v2/log"
-	"github.com/stretchr/testify/assert"
+	"dario.cat/mergo"
 )
 
 const (
@@ -123,43 +122,67 @@ func TestConfig(t *testing.T) {
 		WithSource(newTestJSONSource(_testJSON)),
 		WithDecoder(defaultDecoder),
 		WithResolver(defaultResolver),
-		WithLogger(log.DefaultLogger),
 	)
 	err = c.Close()
-	assert.Nil(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	jSource := newTestJSONSource(_testJSON)
 	opts := options{
 		sources:  []Source{jSource},
 		decoder:  defaultDecoder,
 		resolver: defaultResolver,
-		logger:   log.DefaultLogger,
+		merge: func(dst, src any) error {
+			return mergo.Map(dst, src, mergo.WithOverride)
+		},
 	}
 	cf := &config{}
 	cf.opts = opts
 	cf.reader = newReader(opts)
 
 	err = cf.Load()
-	assert.Nil(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	val, err := cf.Value("data.database.driver").String()
-	assert.Nil(t, err)
-	assert.Equal(t, databaseDriver, val)
+	driver, err := cf.Value("data.database.driver").String()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if databaseDriver != driver {
+		t.Fatal("databaseDriver is not equal to val")
+	}
 
-	err = cf.Watch("endpoints", func(key string, value Value) {
-	})
-	assert.Nil(t, err)
+	err = cf.Watch("endpoints", func(string, Value) {})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	jSource.sig <- struct{}{}
 	jSource.err <- struct{}{}
 
 	var testConf testConfigStruct
 	err = cf.Scan(&testConf)
-	assert.Nil(t, err)
-	assert.Equal(t, httpAddr, testConf.Server.HTTP.Addr)
-	assert.Equal(t, httpTimeout, testConf.Server.HTTP.Timeout)
-	assert.Equal(t, true, testConf.Server.HTTP.EnableSSL)
-	assert.Equal(t, grpcPort, testConf.Server.GRPC.Port)
-	assert.Equal(t, endpoint1, testConf.Endpoints[0])
-	assert.Equal(t, 2, len(testConf.Endpoints))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if httpAddr != testConf.Server.HTTP.Addr {
+		t.Errorf("testConf.Server.HTTP.Addr want: %s, got: %s", httpAddr, testConf.Server.HTTP.Addr)
+	}
+	if httpTimeout != testConf.Server.HTTP.Timeout {
+		t.Errorf("testConf.Server.HTTP.Timeout want: %.1f, got: %.1f", httpTimeout, testConf.Server.HTTP.Timeout)
+	}
+	if !testConf.Server.HTTP.EnableSSL {
+		t.Error("testConf.Server.HTTP.EnableSSL is not equal to true")
+	}
+	if grpcPort != testConf.Server.GRPC.Port {
+		t.Errorf("testConf.Server.GRPC.Port want: %d, got: %d", grpcPort, testConf.Server.GRPC.Port)
+	}
+	if endpoint1 != testConf.Endpoints[0] {
+		t.Errorf("testConf.Endpoints[0] want: %s, got: %s", endpoint1, testConf.Endpoints[0])
+	}
+	if len(testConf.Endpoints) != 2 {
+		t.Error("len(testConf.Endpoints) is not equal to 2")
+	}
 }

@@ -14,8 +14,11 @@ var CmdChange = &cobra.Command{
 	Long:  "Get a kratos release or commits info. Example: kratos changelog dev or kratos changelog {version}",
 	Run:   run,
 }
-var token string
-var repoURL string
+
+var (
+	token   string
+	repoURL string
+)
 
 func init() {
 	if repoURL = os.Getenv("KRATOS_REPO"); repoURL == "" {
@@ -25,9 +28,9 @@ func init() {
 	token = os.Getenv("GITHUB_TOKEN")
 }
 
-func run(cmd *cobra.Command, args []string) {
-	owner, repo := ParseGithubUrl(repoURL)
-	api := GithubApi{Owner: owner, Repo: repo, Token: token}
+func run(_ *cobra.Command, args []string) {
+	owner, repo := ParseGithubURL(repoURL)
+	api := GithubAPI{Owner: owner, Repo: repo, Token: token}
 	version := "latest"
 	if len(args) > 0 {
 		version = args[0]
@@ -35,8 +38,8 @@ func run(cmd *cobra.Command, args []string) {
 	if version == "dev" {
 		info := api.GetCommitsInfo()
 		fmt.Print(ParseCommitsInfo(info))
-	} else {
-		info := api.GetReleaseInfo(version)
-		fmt.Print(ParseReleaseInfo(info))
+		return
 	}
+	info := api.GetReleaseInfo(version)
+	fmt.Print(ParseReleaseInfo(info))
 }

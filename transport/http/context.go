@@ -9,9 +9,11 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/go-kratos/kratos/v2/middleware"
-	"github.com/go-kratos/kratos/v2/transport/http/binding"
 	"github.com/gorilla/mux"
+
+	"github.com/go-kratos/kratos/v2/middleware"
+	"github.com/go-kratos/kratos/v2/transport"
+	"github.com/go-kratos/kratos/v2/transport/http/binding"
 )
 
 var _ Context = (*wrapper)(nil)
@@ -26,14 +28,14 @@ type Context interface {
 	Request() *http.Request
 	Response() http.ResponseWriter
 	Middleware(middleware.Handler) middleware.Handler
-	Bind(interface{}) error
-	BindVars(interface{}) error
-	BindQuery(interface{}) error
-	BindForm(interface{}) error
-	Returns(interface{}, error) error
-	Result(int, interface{}) error
-	JSON(int, interface{}) error
-	XML(int, interface{}) error
+	Bind(any) error
+	BindVars(any) error
+	BindQuery(any) error
+	BindForm(any) error
+	Returns(any, error) error
+	Result(int, any) error
+	JSON(int, any) error
+	XML(int, any) error
 	String(int, string) error
 	Blob(int, string, []byte) error
 	Stream(int, string, io.Reader) error
@@ -45,7 +47,7 @@ type responseWriter struct {
 	w    http.ResponseWriter
 }
 
-func (w *responseWriter) rest(res http.ResponseWriter) {
+func (w *responseWriter) reset(res http.ResponseWriter) {
 	w.w = res
 	w.code = http.StatusOK
 }
@@ -55,6 +57,7 @@ func (w *responseWriter) Write(data []byte) (int, error) {
 	w.w.WriteHeader(w.code)
 	return w.w.Write(data)
 }
+func (w *responseWriter) Unwrap() http.ResponseWriter { return w.w }
 
 type wrapper struct {
 	router *Router
@@ -89,31 +92,34 @@ func (c *wrapper) Query() url.Values {
 func (c *wrapper) Request() *http.Request        { return c.req }
 func (c *wrapper) Response() http.ResponseWriter { return c.res }
 func (c *wrapper) Middleware(h middleware.Handler) middleware.Handler {
-	return middleware.Chain(c.router.srv.ms...)(h)
+	if tr, ok := transport.FromServerContext(c.req.Context()); ok {
+		return middleware.Chain(c.router.srv.middleware.Match(tr.Operation())...)(h)
+	}
+	return middleware.Chain(c.router.srv.middleware.Match(c.req.URL.Path)...)(h)
 }
-func (c *wrapper) Bind(v interface{}) error      { return c.router.srv.dec(c.req, v) }
-func (c *wrapper) BindVars(v interface{}) error  { return binding.BindQuery(c.Vars(), v) }
-func (c *wrapper) BindQuery(v interface{}) error { return binding.BindQuery(c.Query(), v) }
-func (c *wrapper) BindForm(v interface{}) error  { return binding.BindForm(c.req, v) }
-func (c *wrapper) Returns(v interface{}, err error) error {
+func (c *wrapper) Bind(v any) error      { return c.router.srv.decBody(c.req, v) }
+func (c *wrapper) BindVars(v any) error  { return c.router.srv.decVars(c.req, v) }
+func (c *wrapper) BindQuery(v any) error { return c.router.srv.decQuery(c.req, v) }
+func (c *wrapper) BindForm(v any) error  { return binding.BindForm(c.req, v) }
+func (c *wrapper) Returns(v any, err error) error {
 	if err != nil {
 		return err
 	}
 	return c.router.srv.enc(&c.w, c.req, v)
 }
 
-func (c *wrapper) Result(code int, v interface{}) error {
+func (c *wrapper) Result(code int, v any) error {
 	c.w.WriteHeader(code)
 	return c.router.srv.enc(&c.w, c.req, v)
 }
 
-func (c *wrapper) JSON(code int, v interface{}) error {
+func (c *wrapper) JSON(code int, v any) error {
 	c.res.Header().Set("Content-Type", "application/json")
 	c.res.WriteHeader(code)
 	return json.NewEncoder(c.res).Encode(v)
 }
 
-func (c *wrapper) XML(code int, v interface{}) error {
+func (c *wrapper) XML(code int, v any) error {
 	c.res.Header().Set("Content-Type", "application/xml")
 	c.res.WriteHeader(code)
 	return xml.NewEncoder(c.res).Encode(v)
@@ -147,7 +153,7 @@ func (c *wrapper) Stream(code int, contentType string, rd io.Reader) error {
 }
 
 func (c *wrapper) Reset(res http.ResponseWriter, req *http.Request) {
-	c.w.rest(res)
+	c.w.reset(res)
 	c.res = res
 	c.req = req
 }
@@ -173,7 +179,7 @@ func (c *wrapper) Err() error {
 	return c.req.Context().Err()
 }
 
-func (c *wrapper) Value(key interface{}) interface{} {
+func (c *wrapper) Value(key any) any {
 	if c.req == nil {
 		return nil
 	}

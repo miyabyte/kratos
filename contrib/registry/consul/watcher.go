@@ -16,24 +16,29 @@ type watcher struct {
 }
 
 func (w *watcher) Next() (services []*registry.ServiceInstance, err error) {
+	if err = w.ctx.Err(); err != nil {
+		return
+	}
+
 	select {
 	case <-w.ctx.Done():
 		err = w.ctx.Err()
+		return
 	case <-w.event:
 	}
+
 	ss, ok := w.set.services.Load().([]*registry.ServiceInstance)
 	if ok {
-		for _, s := range ss {
-			services = append(services, s)
-		}
+		services = append(services, ss...)
 	}
 	return
 }
 
 func (w *watcher) Stop() error {
-	w.cancel()
-	w.set.lock.Lock()
-	defer w.set.lock.Unlock()
-	delete(w.set.watcher, w)
+	if w.cancel != nil {
+		w.cancel()
+		w.cancel = nil
+		w.set.delete(w)
+	}
 	return nil
 }

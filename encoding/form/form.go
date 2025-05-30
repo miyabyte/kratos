@@ -4,10 +4,10 @@ import (
 	"net/url"
 	"reflect"
 
-	"github.com/go-kratos/kratos/v2/encoding"
-
 	"github.com/go-playground/form/v4"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/go-kratos/kratos/v2/encoding"
 )
 
 const (
@@ -17,11 +17,18 @@ const (
 	nullStr = "null"
 )
 
+var (
+	encoder = form.NewEncoder()
+	decoder = form.NewDecoder()
+)
+
+// This variable can be replaced with -ldflags like below:
+// go build "-ldflags=-X github.com/go-kratos/kratos/v2/encoding/form.tagName=form"
+var tagName = "json"
+
 func init() {
-	decoder := form.NewDecoder()
-	decoder.SetTagName("json")
-	encoder := form.NewEncoder()
-	encoder.SetTagName("json")
+	decoder.SetTagName(tagName)
+	encoder.SetTagName(tagName)
 	encoding.RegisterCodec(codec{encoder: encoder, decoder: decoder})
 }
 
@@ -30,11 +37,11 @@ type codec struct {
 	decoder *form.Decoder
 }
 
-func (c codec) Marshal(v interface{}) ([]byte, error) {
+func (c codec) Marshal(v any) ([]byte, error) {
 	var vs url.Values
 	var err error
 	if m, ok := v.(proto.Message); ok {
-		vs, err = EncodeMap(m)
+		vs, err = EncodeValues(m)
 		if err != nil {
 			return nil, err
 		}
@@ -52,7 +59,7 @@ func (c codec) Marshal(v interface{}) ([]byte, error) {
 	return []byte(vs.Encode()), nil
 }
 
-func (c codec) Unmarshal(data []byte, v interface{}) error {
+func (c codec) Unmarshal(data []byte, v any) error {
 	vs, err := url.ParseQuery(string(data))
 	if err != nil {
 		return err
@@ -66,9 +73,10 @@ func (c codec) Unmarshal(data []byte, v interface{}) error {
 		rv = rv.Elem()
 	}
 	if m, ok := v.(proto.Message); ok {
-		return MapProto(m, vs)
-	} else if m, ok := reflect.Indirect(reflect.ValueOf(v)).Interface().(proto.Message); ok {
-		return MapProto(m, vs)
+		return DecodeValues(m, vs)
+	}
+	if m, ok := rv.Interface().(proto.Message); ok {
+		return DecodeValues(m, vs)
 	}
 
 	return c.decoder.Decode(v, vs)

@@ -17,16 +17,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func setClientSpan(ctx context.Context, span trace.Span, m interface{}) {
-	attrs := []attribute.KeyValue{}
-	var remote string
-	var operation string
-	var rpcKind string
-	if tr, ok := transport.FromClientContext(ctx); ok {
+func setClientSpan(ctx context.Context, span trace.Span, m any) {
+	var (
+		attrs     []attribute.KeyValue
+		remote    string
+		operation string
+		rpcKind   string
+	)
+	tr, ok := transport.FromClientContext(ctx)
+	if ok {
 		operation = tr.Operation()
 		rpcKind = tr.Kind().String()
-		if tr.Kind() == transport.KindHTTP {
-			if ht, ok := tr.(*http.Transport); ok {
+		switch tr.Kind() {
+		case transport.KindHTTP:
+			if ht, ok := tr.(http.Transporter); ok {
 				method := ht.Request().Method
 				route := ht.PathTemplate()
 				path := ht.Request().URL.Path
@@ -35,7 +39,7 @@ func setClientSpan(ctx context.Context, span trace.Span, m interface{}) {
 				attrs = append(attrs, semconv.HTTPTargetKey.String(path))
 				remote = ht.Request().Host
 			}
-		} else if tr.Kind() == transport.KindGRPC {
+		case transport.KindGRPC:
 			remote, _ = parseTarget(tr.Endpoint())
 		}
 	}
@@ -52,16 +56,20 @@ func setClientSpan(ctx context.Context, span trace.Span, m interface{}) {
 	span.SetAttributes(attrs...)
 }
 
-func setServerSpan(ctx context.Context, span trace.Span, m interface{}) {
-	attrs := []attribute.KeyValue{}
-	var remote string
-	var operation string
-	var rpcKind string
-	if tr, ok := transport.FromServerContext(ctx); ok {
+func setServerSpan(ctx context.Context, span trace.Span, m any) {
+	var (
+		attrs     []attribute.KeyValue
+		remote    string
+		operation string
+		rpcKind   string
+	)
+	tr, ok := transport.FromServerContext(ctx)
+	if ok {
 		operation = tr.Operation()
 		rpcKind = tr.Kind().String()
-		if tr.Kind() == transport.KindHTTP {
-			if ht, ok := tr.(*http.Transport); ok {
+		switch tr.Kind() {
+		case transport.KindHTTP:
+			if ht, ok := tr.(http.Transporter); ok {
 				method := ht.Request().Method
 				route := ht.PathTemplate()
 				path := ht.Request().URL.Path
@@ -70,7 +78,7 @@ func setServerSpan(ctx context.Context, span trace.Span, m interface{}) {
 				attrs = append(attrs, semconv.HTTPTargetKey.String(path))
 				remote = ht.Request().RemoteAddr
 			}
-		} else if tr.Kind() == transport.KindGRPC {
+		case transport.KindGRPC:
 			if p, ok := peer.FromContext(ctx); ok {
 				remote = p.Addr.String()
 			}
@@ -96,7 +104,7 @@ func setServerSpan(ctx context.Context, span trace.Span, m interface{}) {
 func parseFullMethod(fullMethod string) (string, []attribute.KeyValue) {
 	name := strings.TrimLeft(fullMethod, "/")
 	parts := strings.SplitN(name, "/", 2)
-	if len(parts) != 2 { //nolint:gomnd
+	if len(parts) != 2 { //nolint:mnd
 		// Invalid format, does not follow `/package.service/method`.
 		return name, []attribute.KeyValue{attribute.Key("rpc.operation").String(fullMethod)}
 	}

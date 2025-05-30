@@ -2,38 +2,51 @@ package http
 
 import (
 	"bytes"
-	"io/ioutil"
-	nethttp "net/http"
+	"io"
+	"net/http"
 	"testing"
 
 	"github.com/go-kratos/kratos/v2/errors"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestDefaultRequestDecoder(t *testing.T) {
-	req1 := &nethttp.Request{
-		Header: make(nethttp.Header),
-		Body:   ioutil.NopCloser(bytes.NewBufferString("{\"a\":\"1\", \"b\": 2}")),
-	}
-	req1.Header.Set("Content-Type", "application/json")
+	var (
+		bodyStr = `{"a":"1", "b": 2}`
+		r, _    = http.NewRequest(http.MethodPost, "", io.NopCloser(bytes.NewBufferString(bodyStr)))
+	)
+	r.Header.Set("Content-Type", "application/json")
 
 	v1 := &struct {
 		A string `json:"a"`
 		B int64  `json:"b"`
 	}{}
-	err1 := DefaultRequestDecoder(req1, &v1)
-	assert.Nil(t, err1)
-	assert.Equal(t, "1", v1.A)
-	assert.Equal(t, int64(2), v1.B)
+	err := DefaultRequestDecoder(r, &v1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1.A != "1" {
+		t.Errorf("expected %v, got %v", "1", v1.A)
+	}
+	if v1.B != int64(2) {
+		t.Errorf("expected %v, got %v", 2, v1.B)
+	}
+
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bodyStr != string(data) {
+		t.Errorf("expected %v, got %v", bodyStr, string(data))
+	}
 }
 
 type mockResponseWriter struct {
 	StatusCode int
 	Data       []byte
-	header     nethttp.Header
+	header     http.Header
 }
 
-func (w *mockResponseWriter) Header() nethttp.Header {
+func (w *mockResponseWriter) Header() http.Header {
 	return w.header
 }
 
@@ -46,58 +59,95 @@ func (w *mockResponseWriter) WriteHeader(statusCode int) {
 	w.StatusCode = statusCode
 }
 
-type dataWithStatusCode struct {
-	A string `json:"a"`
-	B int64  `json:"b"`
-}
-
 func TestDefaultResponseEncoder(t *testing.T) {
-	w := &mockResponseWriter{StatusCode: 200, header: make(nethttp.Header)}
-	req1 := &nethttp.Request{
-		Header: make(nethttp.Header),
-	}
-	req1.Header.Set("Content-Type", "application/json")
+	var (
+		w    = &mockResponseWriter{StatusCode: 200, header: make(http.Header)}
+		r, _ = http.NewRequest(http.MethodPost, "", nil)
+		v    = &struct {
+			A string `json:"a"`
+			B int64  `json:"b"`
+		}{
+			A: "1",
+			B: 2,
+		}
+	)
+	r.Header.Set("Content-Type", "application/json")
 
-	v1 := &dataWithStatusCode{A: "1", B: 2}
-	err := DefaultResponseEncoder(w, req1, v1)
-	assert.Nil(t, err)
-	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
-	assert.Equal(t, 200, w.StatusCode)
-	assert.NotNil(t, w.Data)
+	err := DefaultResponseEncoder(w, r, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("expected %v, got %v", "application/json", w.Header().Get("Content-Type"))
+	}
+	if w.StatusCode != 200 {
+		t.Errorf("expected %v, got %v", 200, w.StatusCode)
+	}
+	if w.Data == nil {
+		t.Errorf("expected not nil, got %v", w.Data)
+	}
 }
 
-func TestDefaultResponseEncoderWithError(t *testing.T) {
-	w := &mockResponseWriter{header: make(nethttp.Header)}
-	req := &nethttp.Request{
-		Header: make(nethttp.Header),
-	}
-	req.Header.Set("Content-Type", "application/json")
+func TestDefaultErrorEncoder(t *testing.T) {
+	var (
+		w    = &mockResponseWriter{header: make(http.Header)}
+		r, _ = http.NewRequest(http.MethodPost, "", nil)
+		err  = errors.New(511, "", "")
+	)
+	r.Header.Set("Content-Type", "application/json")
 
-	se := &errors.Error{Code: 511}
-	DefaultErrorEncoder(w, req, se)
-	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
-	assert.Equal(t, 511, w.StatusCode)
-	assert.NotNil(t, w.Data)
+	DefaultErrorEncoder(w, r, err)
+	if w.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("expected %v, got %v", "application/json", w.Header().Get("Content-Type"))
+	}
+	if w.StatusCode != 511 {
+		t.Errorf("expected %v, got %v", 511, w.StatusCode)
+	}
+	if w.Data == nil {
+		t.Errorf("expected not nil, got %v", w.Data)
+	}
+}
+
+func TestDefaultResponseEncoderEncodeNil(t *testing.T) {
+	var (
+		w    = &mockResponseWriter{StatusCode: 204, header: make(http.Header)}
+		r, _ = http.NewRequest(http.MethodPost, "", io.NopCloser(bytes.NewBufferString("<xml></xml>")))
+	)
+	r.Header.Set("Content-Type", "application/json")
+
+	err := DefaultResponseEncoder(w, r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Header().Get("Content-Type") != "" {
+		t.Errorf("expected empty string, got %v", w.Header().Get("Content-Type"))
+	}
+	if w.StatusCode != 204 {
+		t.Errorf("expected %v, got %v", 204, w.StatusCode)
+	}
+	if w.Data != nil {
+		t.Errorf("expected nil, got %v", w.Data)
+	}
 }
 
 func TestCodecForRequest(t *testing.T) {
-	req1 := &nethttp.Request{
-		Header: make(nethttp.Header),
-		Body:   ioutil.NopCloser(bytes.NewBufferString("<xml></xml>")),
+	r, _ := http.NewRequest(http.MethodPost, "", io.NopCloser(bytes.NewBufferString("<xml></xml>")))
+	r.Header.Set("Content-Type", "application/xml")
+	c, ok := CodecForRequest(r, "Content-Type")
+	if !ok {
+		t.Fatalf("expected true, got %v", ok)
 	}
-	req1.Header.Set("Content-Type", "application/xml")
-
-	c, ok := CodecForRequest(req1, "Content-Type")
-	assert.True(t, ok)
-	assert.Equal(t, "xml", c.Name())
-
-	req2 := &nethttp.Request{
-		Header: make(nethttp.Header),
-		Body:   ioutil.NopCloser(bytes.NewBufferString("{\"a\":\"1\", \"b\": 2}")),
+	if c.Name() != "xml" {
+		t.Errorf("expected %v, got %v", "xml", c.Name())
 	}
-	req2.Header.Set("Content-Type", "blablablabla")
 
-	c, ok = CodecForRequest(req2, "Content-Type")
-	assert.False(t, ok)
-	assert.Equal(t, "json", c.Name())
+	r, _ = http.NewRequest(http.MethodPost, "", io.NopCloser(bytes.NewBufferString(`{"a":"1", "b": 2}`)))
+	r.Header.Set("Content-Type", "blablablabla")
+	c, ok = CodecForRequest(r, "Content-Type")
+	if ok {
+		t.Fatalf("expected false, got %v", ok)
+	}
+	if c.Name() != "json" {
+		t.Errorf("expected %v, got %v", "json", c.Name())
+	}
 }
